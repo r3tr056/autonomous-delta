@@ -1,0 +1,295 @@
+# Multi-stage Dockerfile for ESP32 Delta Robot Firmware
+# This container builds and flashes the delta robot firmware for ESP32
+
+# =============================================================================
+# ESP-IDF Base Stage
+# =============================================================================
+FROM espressif/idf:v5.2 AS esp-base
+
+# Install additional system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    curl \
+    unzip \
+    build-essential \
+    cmake \
+    ninja-build \
+    python3-pip \
+    python3-venv \
+    udev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set ESP-IDF environment
+ENV IDF_PATH=/opt/esp/idf
+ENV IDF_TOOLS_PATH=/opt/esp/tools
+
+# =============================================================================
+# micro-ROS Setup Stage
+# =============================================================================
+FROM esp-base AS microros-setup
+
+# Create workspace for micro-ROS
+WORKDIR /opt/microros_ws
+
+# Clone micro-ROS for ESP32
+RUN git clone -b iron https://github.com/micro-ROS/micro_ros_espidf_component.git src/micro_ros_espidf_component
+
+# Install micro-ROS dependencies
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install \
+    catkin_pkg \
+    lark-parser \
+    empy==3.3.4 \
+    colcon-common-extensions
+
+# Set up micro-ROS environment
+ENV MICROROS_LIBRARY_FOLDER=/opt/microros_ws/src/micro_ros_espidf_component
+ENV PATH="$PATH:/opt/microros_ws/src/micro_ros_espidf_component/bin"
+
+# =============================================================================
+# Firmware Build Stage
+# =============================================================================
+FROM microros-setup AS firmware-build
+
+# Create firmware workspace
+WORKDIR /opt/firmware
+
+# Copy firmware source
+COPY firmware/delta-fw ./delta-fw
+
+# Set up ESP-IDF and micro-ROS environment for build
+# IDF environment will be sourced within build/flash scripts as needed
+
+# Create build script
+RUN cat > build_firmware.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "🔧 Setting up ESP-IDF environment..."
+source $IDF_PATH/export.sh
+
+echo "📁 Entering firmware directory..."
+cd /opt/firmware/delta-fw
+
+echo "🧹 Cleaning previous build..."
+idf.py clean || true
+
+echo "⚙️  Configuring project..."
+idf.py set-target esp32
+
+echo "🔨 Building firmware..."
+idf.py build
+
+echo "✅ Firmware build completed!"
+echo "📦 Binary location: build/delta-fw.bin"
+echo "📦 Bootloader: build/bootloader/bootloader.bin"
+echo "📦 Partition table: build/partition_table/partition-table.bin"
+
+# Create combined binary for easier flashing
+echo "🔗 Creating combined binary..."
+esptool.py --chip esp32 merge_bin -o build/delta-fw-complete.bin \
+    --flash_mode dio --flash_freq 40m --flash_size 4MB \
+    0x1000 build/bootloader/bootloader.bin \
+    0x10000 build/delta-fw.bin \
+    0x8000 build/partition_table/partition-table.bin
+
+echo "🎉 Complete firmware binary: build/delta-fw-complete.bin"
+EOF
+
+RUN chmod +x build_firmware.sh
+
+# Build the firmware
+RUN ./build_firmware.sh
+
+# =============================================================================
+# Flash Tools Stage (Runtime)
+# =============================================================================
+FROM microros-setup AS flash-tools
+
+# Install additional flashing tools
+RUN python3 -m pip install esptool pyserial
+
+# Copy built firmware from build stage
+COPY --from=firmware-build /opt/firmware/delta-fw/build /opt/firmware/build
+
+# Create flashing scripts
+RUN cat > flash_firmware.sh << 'EOF'
+#!/bin/bash
+set -e
+
+DEVICE=${1:-/dev/ttyUSB0}
+BAUD=${2:-115200}
+
+echo "🚀 Flashing Delta Robot firmware to ESP32"
+echo "📱 Device: $DEVICE"
+echo "⚡ Baud rate: $BAUD"
+echo ""
+
+# Check if device exists
+if [ ! -e "$DEVICE" ]; then
+    echo "❌ Device $DEVICE not found!"
+    echo "💡 Available devices:"
+    ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo "   No USB/ACM devices found"
+    exit 1
+fi
+
+# Flash the firmware
+echo "🔥 Flashing firmware..."
+esptool.py --chip esp32 --port $DEVICE --baud $BAUD write_flash \
+    --flash_mode dio --flash_freq 40m --flash_size 4MB \
+    0x1000 /opt/firmware/build/bootloader/bootloader.bin \
+    0x10000 /opt/firmware/build/delta-fw.bin \
+    0x8000 /opt/firmware/build/partition_table/partition-table.bin
+
+echo ""
+echo "✅ Firmware flashed successfully!"
+echo "🔌 You can now disconnect and reconnect the ESP32"
+echo ""
+echo "📋 To monitor serial output:"
+echo "   docker run --rm -it --device=$DEVICE delta-robot-firmware monitor $DEVICE"
+EOF
+
+RUN cat > monitor_serial.sh << 'EOF'
+#!/bin/bash
+set -e
+
+DEVICE=${1:-/dev/ttyUSB0}
+BAUD=${2:-115200}
+
+echo "📺 Monitoring ESP32 serial output"
+echo "📱 Device: $DEVICE"
+echo "⚡ Baud rate: $BAUD"
+echo "Press Ctrl+C to exit"
+echo ""
+
+# Monitor serial output
+python3 -m serial.tools.miniterm $DEVICE $BAUD --exit-char 3
+EOF
+
+RUN cat > erase_flash.sh << 'EOF'
+#!/bin/bash
+set -e
+
+DEVICE=${1:-/dev/ttyUSB0}
+BAUD=${2:-115200}
+
+echo "🗑️  Erasing ESP32 flash memory"
+echo "📱 Device: $DEVICE"
+echo ""
+
+read -p "⚠️  This will erase ALL data on the ESP32. Continue? (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    esptool.py --chip esp32 --port $DEVICE --baud $BAUD erase_flash
+    echo "✅ Flash erased successfully!"
+else
+    echo "❌ Operation cancelled"
+    exit 1
+fi
+EOF
+
+RUN cat > info.sh << 'EOF'
+#!/bin/bash
+set -e
+
+DEVICE=${1:-/dev/ttyUSB0}
+
+echo "ℹ️  ESP32 Chip Information"
+echo "📱 Device: $DEVICE"
+echo ""
+
+esptool.py --chip esp32 --port $DEVICE chip_id
+esptool.py --chip esp32 --port $DEVICE flash_id
+EOF
+
+# Make all scripts executable
+RUN chmod +x *.sh
+
+# Create entrypoint script
+RUN cat > entrypoint.sh << 'EOF'
+#!/bin/bash
+
+case "$1" in
+    flash)
+        shift
+        ./flash_firmware.sh "$@"
+        ;;
+    monitor)
+        shift
+        ./monitor_serial.sh "$@"
+        ;;
+    erase)
+        shift
+        ./erase_flash.sh "$@"
+        ;;
+    info)
+        shift
+        ./info.sh "$@"
+        ;;
+    build)
+        echo "🔨 Rebuilding firmware..."
+        cd /opt/firmware/delta-fw
+        source $IDF_PATH/export.sh
+        idf.py build
+        echo "✅ Build completed!"
+        ;;
+    *)
+        echo "🤖 Delta Robot Firmware Container"
+        echo "=================================="
+        echo ""
+        echo "Available commands:"
+        echo "  flash [device] [baud]    - Flash firmware to ESP32 (default: /dev/ttyUSB0 115200)"
+        echo "  monitor [device] [baud]  - Monitor serial output (default: /dev/ttyUSB0 115200)"
+        echo "  erase [device] [baud]    - Erase ESP32 flash memory"
+        echo "  info [device]            - Show ESP32 chip information"
+        echo "  build                    - Rebuild firmware"
+        echo ""
+        echo "Examples:"
+        echo "  docker run --rm --device=/dev/ttyUSB0 delta-robot-firmware flash"
+        echo "  docker run --rm --device=/dev/ttyUSB0 delta-robot-firmware monitor"
+        echo "  docker run --rm --device=/dev/ttyACM0 delta-robot-firmware flash /dev/ttyACM0"
+        echo ""
+        if [ "$1" = "bash" ] || [ "$1" = "sh" ]; then
+            exec "$@"
+        fi
+        ;;
+esac
+EOF
+
+RUN chmod +x entrypoint.sh
+
+# Set working directory
+WORKDIR /opt/firmware
+
+# Environment variables
+ENV IDF_PATH=/opt/esp/idf
+ENV IDF_TOOLS_PATH=/opt/esp/tools
+
+# Create non-root user
+RUN groupadd -g 1000 firmware && \
+    useradd -u 1000 -g firmware -m -s /bin/bash firmware && \
+    usermod -a -G dialout firmware && \
+    chown -R firmware:firmware /opt/firmware
+
+# Don't switch to non-root user for firmware operations (need device access)
+# USER firmware
+
+# Set entrypoint
+ENTRYPOINT ["./entrypoint.sh"]
+
+# Default command shows help
+CMD ["help"]
+
+# =============================================================================
+# Labels and Metadata
+# =============================================================================
+LABEL org.label-schema.name="Delta Robot Firmware Builder"
+LABEL org.label-schema.description="ESP32 firmware builder and flasher for delta robot"
+LABEL org.label-schema.version="1.0.0"
+LABEL org.label-schema.schema-version="1.0"
+LABEL maintainer="retro <dangerankur56@gmail.com>"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD esptool.py version > /dev/null || exit 1

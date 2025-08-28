@@ -1,0 +1,204 @@
+# Delta Robot System - Docker Build Context Exclusions
+# This file optimizes Docker build performance by excluding unnecessary files
+
+# =============================================================================
+# Version Control
+# =============================================================================
+.git/
+.gitignore
+.gitmodules
+.gitattributes
+
+# =============================================================================
+# ROS Build Artifacts
+# =============================================================================
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+*.bag
+*.db3
+
+# =============================================================================
+# Python Cache and Virtual Environments
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# =============================================================================
+# IDE and Editor Files
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-*
+.atom/
+
+# =============================================================================
+# OS Generated Files
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Documentation and Media (keep essential docs)
+# =============================================================================
+*.md
+!README.md
+!QUICKSTART.md
+docs/
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mov
+*.mp4
+*.avi
+
+# =============================================================================
+# Temporary and Log Files
+# =============================================================================
+*.log
+*.tmp
+*.temp
+/tmp/
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# =============================================================================
+# Test Results and Coverage
+# =============================================================================
+.coverage
+.pytest_cache/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+htmlcov/
+.cache
+
+# =============================================================================
+# Development and Debugging
+# =============================================================================
+.debug/
+core
+*.dmp
+.gdb_history
+
+# =============================================================================
+# Docker Related Files (to avoid recursion)
+# =============================================================================
+.docker/
+docker-compose.override.yml
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# =============================================================================
+# Deployment and CI/CD
+# =============================================================================
+.github/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+deployment/
+scripts/deploy*
+*.deploy
+
+# =============================================================================
+# Configuration Files (environment specific)
+# =============================================================================
+.env.*
+config.local.*
+secrets/
+certificates/
+keys/
+
+# =============================================================================
+# Large Binary Files and Dependencies
+# =============================================================================
+*.tar
+*.tar.gz
+*.zip
+*.7z
+*.dmg
+*.iso
+node_modules/
+vendor/
+
+# =============================================================================
+# YOLO Model Files (comment out if needed in container)
+# =============================================================================
+*.pt
+*.weights
+runs/
+models/
+datasets/
+
+# =============================================================================
+# Hardware Specific Files
+# =============================================================================
+firmware/build/
+firmware/sdkconfig*
+firmware/managed_components/
+firmware/dependencies.lock
+
+# =============================================================================
+# Backup Files
+# =============================================================================
+*.bak
+*.backup
+*.old
+*.orig
+*~
+
+# =============================================================================
+# Development Tools
+# =============================================================================
+Makefile.local
+package-lock.json
+yarn.lock

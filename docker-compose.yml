@@ -1,0 +1,199 @@
+version: '3.8'
+
+# Delta Robot System - Docker Compose Configuration
+# This file provides easy deployment for both simulation and hardware modes
+
+services:
+  # =============================================================================
+  # ROS Environment Service (Main Application)
+  # =============================================================================
+  delta-robot-ros:
+    build:
+      context: .
+      dockerfile: Dockerfile.ros
+      target: runtime
+    image: delta-robot-ros:latest
+    container_name: delta-robot-ros
+    hostname: delta-robot
+    restart: unless-stopped
+
+    # Environment variables
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedx_cpp
+      - QT_X11_NO_MITSHM=1
+      - XAUTHORITY=/tmp/.docker.xauth
+
+    # Network configuration
+    network_mode: host
+
+    # Volume mounts
+    volumes:
+      # X11 forwarding for GUI applications (RViz, etc.)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /tmp/.docker.xauth:/tmp/.docker.xauth:rw
+
+      # Development volumes (uncomment for development)
+      # - ./ros2_ws/src:/opt/delta_robot_ws/src:rw
+      # - ./test_system.py:/opt/delta_robot_ws/test_system.py:rw
+      # - ./test_simulation.py:/opt/delta_robot_ws/test_simulation.py:rw
+
+      # Configuration and logs
+      - delta-robot-logs:/opt/delta_robot_ws/log
+      - delta-robot-install:/opt/delta_robot_ws/install
+
+    # Device access for hardware mode
+    devices:
+      # ESP32 serial connection (adjust as needed)
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/ttyACM0:/dev/ttyACM0
+      # PS4 Controller
+      - /dev/input:/dev/input
+
+    # Privileged mode for hardware access (can be disabled for simulation)
+    privileged: false
+
+    # Additional capabilities
+    cap_add:
+      - SYS_ADMIN
+
+    # Port exposures (for ROS communication)
+    ports:
+      - "11811:11811/udp"  # ROS DDS discovery
+      - "11888:11888/udp"  # ROS DDS data
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "ros2", "topic", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Default command (can be overridden)
+    command: ["bash"]
+
+  # =============================================================================
+  # Firmware Build Service (ESP32)
+  # =============================================================================
+  delta-robot-firmware:
+    build:
+      context: .
+      dockerfile: Dockerfile.firmware
+      target: flash-tools
+    image: delta-robot-firmware:latest
+    container_name: delta-robot-firmware
+
+    # Only run when explicitly called
+    profiles:
+      - firmware
+
+    # Volume mounts
+    volumes:
+      # Development volume for firmware code
+      # - ./firmware:/opt/firmware:rw
+
+      # Build artifacts persistence
+      - firmware-build:/opt/firmware/build
+
+    # Device access for flashing
+    devices:
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/ttyACM0:/dev/ttyACM0
+
+    # Privileged mode for device access
+    privileged: true
+
+    # Default command shows help
+    command: ["help"]
+
+  # =============================================================================
+  # Development Tools Service (Optional)
+  # =============================================================================
+  delta-robot-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.ros
+      target: workspace-build
+    image: delta-robot-dev:latest
+    container_name: delta-robot-dev
+
+    # Only run for development
+    profiles:
+      - dev
+
+    # Environment
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - QT_X11_NO_MITSHM=1
+
+    # Network
+    network_mode: host
+
+    # Development volumes
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./ros2_ws/src:/opt/delta_robot_ws/src:rw
+      - ./test_system.py:/opt/delta_robot_ws/test_system.py:rw
+      - ./test_simulation.py:/opt/delta_robot_ws/test_simulation.py:rw
+      - ./QUICKSTART.md:/opt/delta_robot_ws/QUICKSTART.md:rw
+      - delta-robot-logs:/opt/delta_robot_ws/log
+
+    # Keep container running for development
+    command: ["sleep", "infinity"]
+
+# =============================================================================
+# Named Volumes
+# =============================================================================
+volumes:
+  delta-robot-logs:
+    driver: local
+    name: delta-robot-logs
+
+  delta-robot-install:
+    driver: local
+    name: delta-robot-install
+
+  firmware-build:
+    driver: local
+    name: firmware-build
+
+# =============================================================================
+# Networks (using host network for simplicity with ROS)
+# =============================================================================
+networks:
+  default:
+    name: delta-robot-net
+    driver: bridge
+
+# =============================================================================
+# Configuration Overrides for Different Environments
+# =============================================================================
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.override.yml up
+
+# Example usage commands:
+#
+# Simulation Mode (default):
+#   docker-compose up delta-robot-ros
+#   docker-compose exec delta-robot-ros delta_sim
+#
+# Hardware Mode:
+#   docker-compose up delta-robot-ros
+#   docker-compose exec delta-robot-ros delta_hw
+#
+# Firmware Operations:
+#   docker-compose --profile firmware run delta-robot-firmware flash
+#   docker-compose --profile firmware run delta-robot-firmware monitor
+#
+# Development Mode:
+#   docker-compose --profile dev up delta-robot-dev
+#   docker-compose --profile dev exec delta-robot-dev bash
+#
+# Build Everything:
+#   docker-compose build
+#
+# Clean Everything:
+#   docker-compose down --volumes --remove-orphans
+#   docker system prune -f
